@@ -639,3 +639,139 @@ Browser Compatibility:
 - Ensure Vue Router history mode works with all browsers
 - Handle browser back/forward correctly
 - Test on mobile browsers (iOS Safari, Chrome Mobile)
+
+Permission Model & Security
+═══════════════════════════
+
+Why Legacy Routing Uses Server-Side Rendering:
+The current PHP implementation handles complex permission scenarios at render time:
+- Full admins see all settings
+- Sub-admins see ISubAdminSettings + delegated settings
+- Regular users with delegated access see only authorized setting classes
+- Sections are hidden entirely if user has no access to any settings within
+
+Current Permission Flow (PHP):
+1. User requests /settings/admin/{section}
+2. AdminSettingsController::index() calls getIndexResponse()
+3. Manager::getAllowedAdminSettings($section, $user) filters:
+   - If admin: return all settings
+   - If sub-admin: return ISubAdminSettings + AuthorizedGroupMapper results
+   - Else: return only AuthorizedGroupMapper results
+4. If empty($settings) && empty($declarative): throw NotAdminException
+5. CommonSettingsTrait::formatSections() hides sections with no accessible settings
+
+Potential SPA Security Pitfalls:
+
+1. Navigation Leakage
+   Risk: Users see section names they shouldn't access
+   Current PHP: formatSections() skips sections where user has no settings
+   SPA Requirement: API must filter sections identically before returning
+
+2. Direct API Access
+   Risk: Malicious user calls /settings/api/section/admin/restricted-section
+   Current PHP: Throws NotAdminException if no allowed settings
+   SPA Requirement: SettingsApiController MUST replicate this check:
+
+   if ($type === 'admin') {
+       $settings = $this->settingsManager->getAllowedAdminSettings($section, $user);
+       $declarative = $this->declarativeManager->getFormsWithValues($user, $type, $section);
+       if (empty($settings) && empty($declarative)) {
+           return new JSONResponse(['error' => 'Access denied'], Http::STATUS_FORBIDDEN);
+       }
+   }
+
+3. Stale Permissions (Session State)
+   Risk: User's permissions change mid-session (removed from group, demoted)
+   Current PHP: Every page load re-checks permissions
+   SPA Consideration: Cached sections may show stale navigation
+   Mitigation Options:
+   - Include permission hash in API response, compare on navigation
+   - Lightweight permission-check endpoint before showing cached content
+   - Accept slight staleness, backend still blocks unauthorized saves
+
+4. Legacy HTML Content Sensitivity
+   Risk: Even within an allowed section, some ISettings might contain sensitive info
+   Current PHP: Renders ALL settings for a section (no per-setting filtering)
+   SPA Impact: Same behavior - we're not making it worse, not improving it
+   Note: This is an existing architectural limitation, not SPA-specific
+
+5. Save Operations (Already Secure)
+   Backend controllers validate permissions on every POST/save operation
+   The SPA doesn't change this - saves go through existing endpoints
+   Declarative settings have their own permission model via IDeclarativeManager
+
+Required Security Checks in SettingsApiController:
+
+class SettingsApiController extends OCSController {
+
+    public function getSection(string $type, string $section): JSONResponse {
+        $user = $this->userSession->getUser();
+
+        // 1. Must be logged in
+        if ($user === null) {
+            throw new NotLoggedInException();
+        }
+
+        // 2. Validate type parameter
+        if (!in_array($type, ['personal', 'admin'], true)) {
+            return new JSONResponse(['error' => 'Invalid type'], Http::STATUS_BAD_REQUEST);
+        }
+
+        // 3. For admin sections: check permissions BEFORE any content loading
+        if ($type === 'admin') {
+            $settings = $this->settingsManager->getAllowedAdminSettings($section, $user);
+            $declarative = $this->declarativeManager->getFormsWithValues($user, $type, $section);
+
+            if (empty($settings) && empty($declarative)) {
+                // CRITICAL: Must match PHP behavior - deny access
+                return new JSONResponse(['error' => 'Access denied'], Http::STATUS_FORBIDDEN);
+            }
+
+            // Only render settings user is allowed to see
+            // getAllowedAdminSettings already filters - use its output, not getAdminSettings
+        }
+
+        // 4. For navigation: only return sections user can access
+        $sections = $this->formatSections(...);  // Uses same filtering logic
+
+        // ... rest of implementation
+    }
+}
+
+Testing Security:
+
+Must test these scenarios:
+1. Regular user accessing /settings/api/section/admin/server → 403
+2. Sub-admin accessing delegated section → 200 with filtered content
+3. Sub-admin accessing non-delegated admin section → 403
+4. Admin accessing any section → 200
+5. Navigation response only includes accessible sections
+6. Permission change mid-session: old cached nav, new API call → 403
+
+Implementation Progress
+═══════════════════════
+
+✅ COMPLETED (Phase 2-3 Frontend):
+- src/views/PersonalSettings.vue - Personal settings container
+- src/views/AdminSettings.vue - Admin settings container
+- src/views/SettingsNavigation.vue - Shared navigation component
+- src/components/LegacySettingsForm.vue - Legacy HTML renderer with DOMPurify
+- src/store/settings-store.ts - Pinia store with caching
+- src/composables/useSettings.ts - Settings data composable
+- src/router/routes.ts - Added personal/admin routes
+- src/settings-types.ts - Added ISettingsSection, IDeclarativeForm, ISectionContent
+
+⏳ TODO (Backend - Phase 4-5):
+- lib/Controller/SettingsApiController.php - API endpoints with security checks
+- lib/Controller/PersonalSettingsController.php - Add SPA mode + InitialState
+- lib/Controller/AdminSettingsController.php - Add SPA mode + InitialState
+- appinfo/routes.php - Add API routes
+
+⏳ TODO (Build - Phase 7):
+- build/frontend-legacy/webpack.modules.cjs - Add entry point (if separate)
+
+⏳ TODO (Testing):
+- Permission scenarios (admin, sub-admin, delegated, regular user)
+- Navigation filtering
+- Direct API access attempts
+- Session state changes

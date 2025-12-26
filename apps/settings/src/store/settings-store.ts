@@ -35,17 +35,55 @@ function contentKey(type: SettingsType, section: string): string {
 	return `${type}-${section}`
 }
 
+/**
+ * Load initial sections from InitialState
+ * The controller provides sections under the 'sections' key
+ */
+function loadInitialSections(): { personal: ISettingsSection[], admin: ISettingsSection[] } {
+	try {
+		const sections = loadState<{ personal: ISettingsSection[], admin: ISettingsSection[] }>(
+			'settings',
+			'sections',
+			{ personal: [], admin: [] },
+		)
+		return sections
+	} catch {
+		return { personal: [], admin: [] }
+	}
+}
+
+/**
+ * Load initial section content from InitialState
+ */
+function loadInitialContent(): ISectionContent | null {
+	try {
+		return loadState<ISectionContent>('settings', 'sectionContent', null)
+	} catch {
+		return null
+	}
+}
+
 export const useSettingsStore = defineStore('settings-spa', {
-	state: (): SettingsState => ({
-		sections: {
-			personal: loadState<ISettingsSection[]>('settings', 'personalSections', []),
-			admin: loadState<ISettingsSection[]>('settings', 'adminSections', []),
-		},
-		content: {},
-		loading: {},
-		errors: {},
-		initialized: false,
-	}),
+	state: (): SettingsState => {
+		const initialSections = loadInitialSections()
+		const initialContent = loadInitialContent()
+		const settingsType = loadState<string>('settings', 'settingsType', '')
+		const currentSection = loadState<string>('settings', 'currentSection', '')
+
+		// Pre-populate content cache with initial content if available
+		const content: Record<string, ISectionContent> = {}
+		if (initialContent && settingsType && currentSection) {
+			content[contentKey(settingsType as SettingsType, currentSection)] = initialContent
+		}
+
+		return {
+			sections: initialSections,
+			content,
+			loading: {},
+			errors: {},
+			initialized: !!initialContent,
+		}
+	},
 
 	getters: {
 		/**
@@ -90,17 +128,12 @@ export const useSettingsStore = defineStore('settings-spa', {
 			// This action is for refreshing if needed
 			if (force) {
 				try {
-					const [personalRes, adminRes] = await Promise.all([
-						axios.get<{ sections: ISettingsSection[] }>(
-							generateUrl('/settings/api/sections/personal'),
-						),
-						axios.get<{ sections: ISettingsSection[] }>(
-							generateUrl('/settings/api/sections/admin'),
-						),
-					])
+					const response = await axios.get<{
+						sections: { personal: ISettingsSection[], admin: ISettingsSection[] }
+					}>(generateUrl('/settings/api/spa/sections'))
 
-					this.sections.personal = personalRes.data.sections ?? []
-					this.sections.admin = adminRes.data.sections ?? []
+					this.sections.personal = response.data.sections?.personal ?? []
+					this.sections.admin = response.data.sections?.admin ?? []
 				} catch (error) {
 					logger.error('Failed to load sections', { error })
 					showApiError()
@@ -136,7 +169,7 @@ export const useSettingsStore = defineStore('settings-spa', {
 						personal: ISettingsSection[]
 						admin: ISettingsSection[]
 					}
-				}>(generateUrl(`/settings/api/section/${type}/${section}`))
+				}>(generateUrl(`/settings/api/spa/section/${type}/${section}`))
 
 				this.content[key] = response.data.content
 
@@ -210,7 +243,7 @@ export const useSettingsStore = defineStore('settings-spa', {
 			// Load in background without showing errors
 			try {
 				const response = await axios.get<{ content: ISectionContent }>(
-					generateUrl(`/settings/api/section/${type}/${section}`),
+					generateUrl(`/settings/api/spa/section/${type}/${section}`),
 				)
 				this.content[key] = response.data.content
 			} catch {

@@ -1,0 +1,242 @@
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Plan: Convert Nextcloud Settings to SPA
+
+ Fork: https://github.com/JustSo-Technology/nextcloud-settings-spa
+ Goal: Convert Personal and Admin settings pages to a Vue SPA with client-side routing (like the Apps page already does)
+
+ Current Architecture
+
+ How It Works Now (Personal/Admin Settings)
+
+ - Template: settings/frame.php - server-renders navigation + content
+ - Controllers: PersonalSettingsController / AdminSettingsController use CommonSettingsTrait
+ - Each page load: Full HTTP request, PHP renders HTML, Vue components mount to placeholders
+ - Navigation: Regular <a href> links cause full page reloads
+
+ How Apps Page Works (Reference SPA)
+
+ - Template: settings/empty.php - nearly empty, Vue takes over #content
+ - Controller: AppSettingsController.viewApps() provides InitialState, returns empty template
+ - Vue Router: Handles /settings/apps/{category}/{id} client-side
+ - Navigation: Vue Router intercepts, no page reloads
+
+ Implementation Plan
+
+ Phase 1: Setup Development Environment
+
+ 1. Clone fork and set up Nextcloud dev environment
+ 2. Ensure build tools work (npm install, npm run dev)
+ 3. Create feature branch feature/settings-spa
+
+ Phase 2: Create Settings SPA Vue App
+
+ New files to create in apps/settings/src/:
+
+ src/
+ ├── main-settings.js              # Entry point for settings SPA
+ ├── SettingsApp.vue               # Root component with router-view
+ ├── router/
+ │   └── settings.js               # Vue Router configuration
+ ├── store/
+ │   └── settings.js               # Pinia/Vuex store for settings state
+ ├── views/
+ │   ├── PersonalSettings.vue      # Personal settings container
+ │   ├── AdminSettings.vue         # Admin settings container
+ │   └── SettingsSection.vue       # Generic section renderer
+ ├── components/
+ │   ├── SettingsNavigation.vue    # Left sidebar navigation
+ │   ├── LegacySettingsForm.vue    # Renders legacy ISettings HTML
+ │   └── DeclarativeForm.vue       # Renders declarative forms (may reuse existing)
+ └── composables/
+     └── useSettings.js            # Settings data fetching logic
+
+ Phase 3: Vue Router Configuration
+
+ File: src/router/settings.js
+
+ const routes = [
+   {
+     path: '/:index(index.php/)?settings/user/:section?',
+     name: 'personal-settings',
+     components: {
+       default: PersonalSettings,
+       navigation: SettingsNavigation
+     },
+     props: { default: route => ({ section: route.params.section || 'personal-info' }) }
+   },
+   {
+     path: '/:index(index.php/)?settings/admin/:section?',
+     name: 'admin-settings',
+     components: {
+       default: AdminSettings,
+       navigation: SettingsNavigation
+     },
+     props: { default: route => ({ section: route.params.section || 'overview' }) }
+   }
+ ]
+
+ Phase 4: New API Endpoints
+
+ Modify apps/settings/appinfo/routes.php:
+
+ // New API routes for SPA
+ ['name' => 'SettingsApi#getSections', 'url' => '/settings/api/sections/{type}', 'verb' => 'GET'],
+ ['name' => 'SettingsApi#getSectionContent', 'url' => '/settings/api/section/{type}/{section}', 'verb' => 'GET'],
+ ['name' => 'SettingsApi#saveSetting', 'url' => '/settings/api/setting', 'verb' => 'POST'],
+
+ New controller: lib/Controller/SettingsApiController.php:
+
+ class SettingsApiController extends OCSController {
+
+     // Returns all sections for navigation
+     public function getSections(string $type): JSONResponse {
+         $sections = $type === 'personal'
+             ? $this->settingsManager->getPersonalSections()
+             : $this->settingsManager->getAdminSections();
+         return new JSONResponse($this->formatSections($sections));
+     }
+
+     // Returns settings content for a section
+     public function getSectionContent(string $type, string $section): JSONResponse {
+         // Get declarative forms
+         $declarative = $this->declarativeManager->getFormsWithValues($user, $type, $section);
+
+         // Get legacy ISettings - return as rendered HTML
+         $legacy = $this->getLegacySettingsHtml($type, $section);
+
+         return new JSONResponse([
+             'declarative' => $declarative,
+             'legacyHtml' => $legacy,
+             'scripts' => $this->getRequiredScripts($type, $section)
+         ]);
+     }
+ }
+
+ Phase 5: Modify Existing Controllers
+
+ File: lib/Controller/PersonalSettingsController.php
+
+ public function index(string $section): TemplateResponse {
+     // Provide all data via InitialState for SPA
+     $this->initialState->provideInitialState('settingsType', 'personal');
+     $this->initialState->provideInitialState('currentSection', $section);
+     $this->initialState->provideInitialState('sections',
+         $this->formatSections($this->settingsManager->getPersonalSections())
+     );
+     $this->initialState->provideInitialState('sectionContent',
+         $this->getSectionContent('personal', $section)
+     );
+
+     // Use empty template - Vue takes over
+     Util::addScript('settings', 'settings-spa');  // New bundle
+     return new TemplateResponse('settings', 'settings/empty', [
+         'pageTitle' => $this->l10n->t('Personal settings')
+     ]);
+ }
+
+ Same pattern for AdminSettingsController.
+
+ Phase 6: Handle Legacy ISettings
+
+ Legacy settings return TemplateResponse with HTML. Options:
+
+ Option A: Render HTML server-side, inject into Vue
+ - API returns pre-rendered HTML
+ - Vue component uses v-html to display
+ - Scripts loaded dynamically
+
+ Option B: Convert legacy to declarative (long-term)
+ - Gradually migrate ISettings to declarative forms
+ - More work but cleaner architecture
+
+ Recommended: Option A first, then gradually migrate to Option B.
+
+ <!-- LegacySettingsForm.vue -->
+ <template>
+   <div v-html="htmlContent" ref="container"></div>
+ </template>
+
+ <script>
+ export default {
+   props: ['htmlContent', 'scripts'],
+   async mounted() {
+     // Load required scripts after HTML is in DOM
+     for (const script of this.scripts) {
+       await this.loadScript(script);
+     }
+   }
+ }
+ </script>
+
+ Phase 7: Webpack Configuration
+
+ Modify webpack.config.js:
+
+ module.exports = {
+   entry: {
+     // Existing entries...
+     'settings-spa': path.join(__dirname, 'src', 'main-settings.js'),
+   },
+   // ... rest of config
+ }
+
+ Phase 8: Template Changes
+
+ File: templates/settings/empty.php (already exists, minimal changes)
+
+ <?php
+ // Empty template - Vue SPA takes over #content
+ style('settings', 'settings');
+ ?>
+
+ File Modification Summary
+
+ | File                                          | Action | Purpose                              |
+ |-----------------------------------------------|--------|--------------------------------------|
+ | src/main-settings.js                          | Create | SPA entry point                      |
+ | src/SettingsApp.vue                           | Create | Root Vue component                   |
+ | src/router/settings.js                        | Create | Vue Router config                    |
+ | src/store/settings.js                         | Create | State management                     |
+ | src/views/*.vue                               | Create | View components                      |
+ | src/components/*.vue                          | Create | UI components                        |
+ | lib/Controller/SettingsApiController.php      | Create | API endpoints                        |
+ | lib/Controller/PersonalSettingsController.php | Modify | Return empty template + InitialState |
+ | lib/Controller/AdminSettingsController.php    | Modify | Return empty template + InitialState |
+ | appinfo/routes.php                            | Modify | Add API routes                       |
+ | webpack.config.js                             | Modify | Add new entry point                  |
+
+ Migration Strategy
+
+ 1. Parallel operation: Keep old frame.php working, new SPA optional via flag
+ 2. Feature flag: 'settings_spa_enabled' => true in config
+ 3. Gradual rollout: Test with specific sections first
+ 4. Backwards compatible: Legacy ISettings still work via HTML injection
+
+ Testing Plan
+
+ 1. Navigation between sections (no page reload)
+ 2. Browser back/forward buttons
+ 3. Direct URL access to sections
+ 4. Legacy ISettings forms render and work
+ 5. Declarative forms render and save
+ 6. Permission checks (admin-only sections)
+ 7. Mobile responsiveness
+
+ Upstream Contribution Notes
+
+ - Follow Nextcloud coding standards
+ - Add unit tests for new API endpoints
+ - Add integration tests for Vue components
+ - Update documentation
+ - Create PR against master branch
+ - Reference any related issues
+
+ Estimated Scope
+
+ - Phase 1-2: 2-3 days (setup + basic Vue app)
+ - Phase 3-4: 2-3 days (router + API)
+ - Phase 5-6: 3-4 days (controller changes + legacy handling)
+ - Phase 7-8: 1-2 days (build + templates)
+ - Testing: 2-3 days
+
+ Total: ~2-3 weeks for MVP with legacy support

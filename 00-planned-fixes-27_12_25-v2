@@ -756,22 +756,36 @@ Implementation Progress
 - src/views/AdminSettings.vue - Admin settings container
 - src/views/SettingsNavigation.vue - Shared navigation component
 - src/components/LegacySettingsForm.vue - Legacy HTML renderer with DOMPurify
-- src/store/settings-store.ts - Pinia store with caching
+- src/store/settings-store.ts - Pinia store with caching + InitialState loading
 - src/composables/useSettings.ts - Settings data composable
 - src/router/routes.ts - Added personal/admin routes
 - src/settings-types.ts - Added ISettingsSection, IDeclarativeForm, ISectionContent
 
-⏳ TODO (Backend - Phase 4-5):
+✅ COMPLETED (Phase 4-5 Backend):
 - lib/Controller/SettingsApiController.php - API endpoints with security checks
-- lib/Controller/PersonalSettingsController.php - Add SPA mode + InitialState
-- lib/Controller/AdminSettingsController.php - Add SPA mode + InitialState
-- appinfo/routes.php - Add API routes
+  - getSection(): Returns section content with getAllowedAdminSettings filtering
+  - getSections(): Returns navigation sections only
+  - Returns 403 for unauthorized admin section access
+- lib/Controller/PersonalSettingsController.php - Added SPA mode with feature flag
+  - getSpaResponse() provides InitialState data for SPA
+  - Falls back to existing frame.php when settings_spa_enabled=false
+- lib/Controller/AdminSettingsController.php - Added SPA mode with feature flag
+  - Includes NotAdminException check matching existing behavior
+- appinfo/routes.php - Added API routes:
+  - /settings/api/spa/section/{type}/{section}
+  - /settings/api/spa/sections
 
 ⏳ TODO (Build - Phase 7):
-- build/frontend-legacy/webpack.modules.cjs - Add entry point (if separate)
+- No separate entry point needed - reusing vue-settings-apps-users-management
+- Consider creating dedicated entry if bundle size is concern
 
 ⏳ TODO (Testing):
 - Permission scenarios (admin, sub-admin, delegated, regular user)
 - Navigation filtering
 - Direct API access attempts
 - Session state changes
+- Enable feature flag and test end-to-end
+
+How to Enable:
+Add to config/config.php:
+  'settings_spa_enabled' => true,

@@ -67,7 +67,8 @@ const section = computed(() => (route.params.section as string) || 'server')
 
 const loading = computed(() => settingsStore.isLoading('admin', section.value))
 const error = computed(() => settingsStore.getError('admin', section.value))
-const accessDenied = computed(() => error.value?.includes('Access denied') || error.value?.includes('403'))
+// Check for access denied using the error code stored in the store, not translated text
+const accessDenied = computed(() => settingsStore.isAccessDenied('admin', section.value))
 
 const sectionContent = computed(() => settingsStore.getSectionContent('admin', section.value))
 const declarativeForms = computed(() => sectionContent.value?.declarative ?? [])

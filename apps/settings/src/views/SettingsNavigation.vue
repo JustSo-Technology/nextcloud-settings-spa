@@ -65,7 +65,16 @@ const currentType = computed(() => {
 	return null
 })
 
-const currentSection = computed(() => route.params.section as string || null)
+// Get current section from route params, falling back to default based on route
+const currentSection = computed(() => {
+	const section = route.params.section as string | undefined
+	if (section) return section
+
+	// Use same defaults as route props
+	if (route.name === 'personal-settings') return 'personal-info'
+	if (route.name === 'admin-settings') return 'server'
+	return null
+})
 
 function isActiveSection(type: string, sectionId: string): boolean {
 	return currentType.value === type && currentSection.value === sectionId

@@ -23,7 +23,32 @@ interface SettingsState {
 	content: Record<string, ISectionContent>
 	loading: Record<string, boolean>
 	errors: Record<string, string | null>
+	errorCodes: Record<string, number | null>
 	initialized: boolean
+}
+
+/**
+ * PHP API returns sections with 'anchor' and 'section-name' keys
+ * Transform to our TypeScript interface with 'id' and 'name'
+ */
+interface PhpSection {
+	anchor: string
+	'section-name': string
+	active: boolean
+	icon: string
+}
+
+function transformSection(phpSection: PhpSection): ISettingsSection {
+	return {
+		id: phpSection.anchor,
+		name: phpSection['section-name'],
+		priority: 0,
+		icon: phpSection.icon,
+	}
+}
+
+function transformSections(phpSections: PhpSection[]): ISettingsSection[] {
+	return phpSections.map(transformSection)
 }
 
 const showApiError = () => showError(t('settings', 'An error occurred during the request. Unable to proceed.'))
@@ -38,15 +63,19 @@ function contentKey(type: SettingsType, section: string): string {
 /**
  * Load initial sections from InitialState
  * The controller provides sections under the 'sections' key
+ * Data comes in PHP format (anchor/section-name) and needs transformation
  */
 function loadInitialSections(): { personal: ISettingsSection[], admin: ISettingsSection[] } {
 	try {
-		const sections = loadState<{ personal: ISettingsSection[], admin: ISettingsSection[] }>(
+		const sections = loadState<{ personal: PhpSection[], admin: PhpSection[] }>(
 			'settings',
 			'sections',
 			{ personal: [], admin: [] },
 		)
-		return sections
+		return {
+			personal: transformSections(sections.personal || []),
+			admin: transformSections(sections.admin || []),
+		}
 	} catch {
 		return { personal: [], admin: [] }
 	}
@@ -81,6 +110,7 @@ export const useSettingsStore = defineStore('settings-spa', {
 			content,
 			loading: {},
 			errors: {},
+			errorCodes: {},
 			initialized: !!initialContent,
 		}
 	},
@@ -113,6 +143,14 @@ export const useSettingsStore = defineStore('settings-spa', {
 		hasCachedContent: (state) => (type: SettingsType, section: string): boolean => {
 			return contentKey(type, section) in state.content
 		},
+
+		/**
+		 * Check if section has access denied error (HTTP 403)
+		 * Uses error code instead of translated text for reliable detection
+		 */
+		isAccessDenied: (state) => (type: SettingsType, section: string): boolean => {
+			return state.errorCodes[contentKey(type, section)] === 403
+		},
 	},
 
 	actions: {
@@ -129,11 +167,12 @@ export const useSettingsStore = defineStore('settings-spa', {
 			if (force) {
 				try {
 					const response = await axios.get<{
-						sections: { personal: ISettingsSection[], admin: ISettingsSection[] }
+						sections: { personal: PhpSection[], admin: PhpSection[] }
 					}>(generateUrl('/settings/api/spa/sections'))
 
-					this.sections.personal = response.data.sections?.personal ?? []
-					this.sections.admin = response.data.sections?.admin ?? []
+					// Transform from PHP format to TypeScript format
+					this.sections.personal = transformSections(response.data.sections?.personal ?? [])
+					this.sections.admin = transformSections(response.data.sections?.admin ?? [])
 				} catch (error) {
 					logger.error('Failed to load sections', { error })
 					showApiError()
@@ -161,34 +200,39 @@ export const useSettingsStore = defineStore('settings-spa', {
 
 			this.loading[key] = true
 			this.errors[key] = null
+			this.errorCodes[key] = null
 
 			try {
 				const response = await axios.get<{
 					content: ISectionContent
 					sections?: {
-						personal: ISettingsSection[]
-						admin: ISettingsSection[]
+						personal: PhpSection[]
+						admin: PhpSection[]
 					}
 				}>(generateUrl(`/settings/api/spa/section/${type}/${section}`))
 
 				this.content[key] = response.data.content
 
 				// Update sections if provided (navigation might have changed)
+				// Transform from PHP format to TypeScript format
 				if (response.data.sections) {
 					if (response.data.sections.personal) {
-						this.sections.personal = response.data.sections.personal
+						this.sections.personal = transformSections(response.data.sections.personal)
 					}
 					if (response.data.sections.admin) {
-						this.sections.admin = response.data.sections.admin
+						this.sections.admin = transformSections(response.data.sections.admin)
 					}
 				}
 			} catch (error) {
 				logger.error('Failed to load section content', { type, section, error })
 
 				if (axios.isAxiosError(error)) {
-					if (error.response?.status === 403) {
+					const status = error.response?.status
+					this.errorCodes[key] = status ?? null
+
+					if (status === 403) {
 						this.errors[key] = t('settings', 'Access denied')
-					} else if (error.response?.status === 404) {
+					} else if (status === 404) {
 						this.errors[key] = t('settings', 'Section not found')
 					} else {
 						this.errors[key] = t('settings', 'Failed to load settings')
@@ -218,6 +262,7 @@ export const useSettingsStore = defineStore('settings-spa', {
 			const key = contentKey(type, section)
 			delete this.content[key]
 			delete this.errors[key]
+			delete this.errorCodes[key]
 		},
 
 		/**
@@ -226,6 +271,7 @@ export const useSettingsStore = defineStore('settings-spa', {
 		clearAllContent(): void {
 			this.content = {}
 			this.errors = {}
+			this.errorCodes = {}
 			this.loading = {}
 		},
 

@@ -1,0 +1,208 @@
+Implementation Summary
+═══════════════════════
+
+This document describes the conversion of Nextcloud Settings pages from server-side rendered PHP templates to a Vue.js Single Page Application (SPA) with client-side routing.
+
+What Was Implemented
+════════════════════
+
+Frontend Components (Vue 2 + TypeScript)
+──────────────────────────────────────────
+
+- src/views/PersonalSettings.vue
+  - Container component for personal settings sections
+  - Handles loading states, errors, and content rendering
+  - Uses settings-store for data management
+  - Displays declarative forms and legacy HTML content
+
+- src/views/AdminSettings.vue
+  - Container component for admin settings sections
+  - Includes access denied handling (403 errors)
+  - Same structure as PersonalSettings but with admin-specific logic
+  - Permission checks handled server-side, displayed client-side
+
+- src/views/SettingsNavigation.vue
+  - Shared navigation sidebar component
+  - Displays both personal and admin sections
+  - Registers/unregisters event listeners for app state changes
+  - Highlights active section based on route
+
+- src/components/LegacySettingsForm.vue
+  - Renders legacy ISettings HTML content safely
+  - Uses DOMPurify for HTML sanitization (XSS prevention)
+  - Dynamically loads required scripts in order
+  - Handles loading states and errors gracefully
+  - Emits 'loaded' event when initialization complete
+
+- src/store/settings-store.ts (Pinia Store)
+  - Caches section content to avoid refetching on navigation
+  - Loads initial data from InitialState on first page load
+  - Fetches subsequent sections via API endpoints
+  - Manages loading states, errors, and error codes (for 403 detection)
+  - Event listener management for app enable/disable/uninstall
+  - FIXED: Event listener memory leak - stores bound handler reference
+
+- src/composables/useSettings.ts
+  - Composable for settings data management
+  - Provides reactive refs for section, loading, error, content
+  - Auto-loads section content when route changes
+  - Exports usePersonalSettings() and useAdminSettings() helpers
+
+- src/router/routes.ts
+  - Added two new routes:
+    - '/:index(index.php/)?settings/user/:section?' → PersonalSettings
+    - '/:index(index.php/)?settings/admin/:section?' → AdminSettings
+  - Default sections: 'personal-info' and 'server' respectively
+  - Uses named routes for navigation
+
+- src/settings-types.ts
+  - Added TypeScript interfaces:
+    - ISettingsSection: Navigation section definition
+    - IDeclarativeFormField: Form field definition
+    - IDeclarativeForm: Complete form definition
+    - ISectionContent: API response structure
+
+Backend Controllers (PHP)
+──────────────────────────
+
+- lib/Controller/SettingsApiController.php
+  - New API controller for SPA data fetching
+  - Extends Controller (not OCSController) for standard routes
+  - Uses CommonSettingsTrait for section formatting
+  - Methods:
+    * getSection($type, $section): Returns full section data
+      - Validates user authentication
+      - Checks admin permissions (403 if unauthorized)
+      - Masks sensitive field values
+      - Returns declarative forms + legacy HTML + navigation sections
+    * getSections(): Lightweight endpoint for navigation only
+  - Security: Replicates PHP permission checks exactly
+
+- lib/Controller/PersonalSettingsController.php
+  - Modified index() method with feature flag check
+  - New getSpaResponse() method:
+    - Provides InitialState data (sections + initial content)
+    - Uses settings/empty.php template
+    - Loads vue-settings-apps-users-management script
+    - Falls back to frame.php when SPA disabled
+
+- lib/Controller/AdminSettingsController.php
+  - Modified index() method with feature flag check
+  - New getSpaResponse() method:
+    - Same pattern as PersonalSettingsController
+    - Includes NotAdminException check before rendering
+    - Ensures no unauthorized access
+
+- appinfo/routes.php
+  - Added two API routes:
+    - '/settings/api/spa/section/{type}/{section}' → SettingsApi#getSection
+    - '/settings/api/spa/sections' → SettingsApi#getSections
+
+Key Implementation Details
+═══════════════════════════
+
+Build Configuration:
+- No separate webpack entry point created
+- Reuses existing 'vue-settings-apps-users-management' entry
+- All new components are lazy-loaded via dynamic imports
+
+Data Flow:
+1. Initial Load: Controller provides InitialState (sections + content)
+2. Navigation: Vue Router intercepts, store checks cache
+3. Cache Miss: API call to SettingsApiController#getSection
+4. Cache Hit: Instant display from Pinia store
+
+Security:
+- All permission checks replicated from PHP implementation
+- Admin sections: getAllowedAdminSettings() filters before rendering
+- Sensitive values masked with 'dummySecret' before sending to client
+- HTML sanitized with DOMPurify before v-html injection
+- CSRF tokens handled by existing Nextcloud infrastructure
+
+Error Handling:
+- HTTP 403: Displayed as "Access denied" message
+- HTTP 404: Displayed as "Section not found"
+- Network errors: User-friendly error with retry button
+- Error codes stored separately for reliable 403 detection
+
+Event Listener Fix:
+- Fixed memory leak in settings-store.ts
+- Problem: Each .bind() call creates new function reference
+- Solution: Store bound handler in module-level variable
+- Same reference used for both subscribe() and unsubscribe()
+
+How to Enable
+═════════════
+
+Add to config/config.php:
+  'settings_spa_enabled' => true,
+
+The feature flag allows:
+- Gradual rollout (enable per-instance)
+- Instant rollback if issues arise
+- A/B testing between old and new implementations
+- Default: false (opt-in)
+
+Testing Checklist
+═════════════════
+
+ Functional:
+- Navigation between sections (no page reload)
+- Browser back/forward buttons work
+- Direct URL access to sections
+- Legacy ISettings forms render and function
+- Declarative forms render and save
+- Permission checks (admin, sub-admin, regular user)
+- Error handling (API failures, network errors)
+- Loading states during navigation
+- Access denied (403) displays correctly
+
+Security:
+- Regular user cannot access admin sections (403)
+- Sub-admin sees only delegated sections
+- Navigation only shows accessible sections
+- Direct API access blocked for unauthorized users
+- Sensitive values masked in API responses
+
+Performance:
+- Section content cached (no refetch on navigation)
+- Initial load time acceptable
+- Navigation feels instant
+- No memory leaks (check event listeners)
+
+Known Limitations
+══════════════════
+
+1. Legacy ISettings: Still rendered server-side as HTML
+   - Future: Gradually migrate to declarative forms
+   - Current: Works via HTML injection with sanitization
+
+2. Script Loading: Legacy forms may have script dependencies
+   - Current: Scripts loaded dynamically in order
+   - May need per-form customization for complex cases
+
+3. Bundle Size: Reuses existing entry point
+   - Future: Consider separate entry if bundle grows too large
+
+4. Permission Staleness: Cached navigation may show stale permissions
+   - Mitigation: Backend still blocks unauthorized saves
+   - Acceptable: Slight UI staleness, security maintained
+
+File Changes Summary
+════════════════════
+
+Created:
+- apps/settings/src/views/PersonalSettings.vue
+- apps/settings/src/views/AdminSettings.vue
+- apps/settings/src/views/SettingsNavigation.vue
+- apps/settings/src/components/LegacySettingsForm.vue
+- apps/settings/src/store/settings-store.ts
+- apps/settings/src/composables/useSettings.ts
+- apps/settings/lib/Controller/SettingsApiController.php
+
+Modified:
+- apps/settings/src/router/routes.ts (added 2 routes)
+- apps/settings/src/settings-types.ts (added interfaces)
+- apps/settings/lib/Controller/PersonalSettingsController.php (SPA mode)
+- apps/settings/lib/Controller/AdminSettingsController.php (SPA mode)
+- apps/settings/appinfo/routes.php (added 2 API routes)

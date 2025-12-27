@@ -38,7 +38,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router/composables'
 import { translate as t } from '@nextcloud/l10n'
 import { mdiCog } from '@mdi/js'
@@ -82,6 +82,13 @@ function isActiveSection(type: string, sectionId: string): boolean {
 
 onMounted(() => {
 	settingsStore.loadSections()
+	// Register event listeners to refresh when apps are enabled/disabled
+	settingsStore.registerEventListeners()
+})
+
+onBeforeUnmount(() => {
+	// Cleanup event listeners
+	settingsStore.unregisterEventListeners()
 })
 </script>
 

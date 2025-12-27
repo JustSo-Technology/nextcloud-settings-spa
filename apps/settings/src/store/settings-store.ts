@@ -7,6 +7,7 @@ import type { IDeclarativeForm, ISettingsSection, ISectionContent } from '../set
 
 import axios from '@nextcloud/axios'
 import { showError } from '@nextcloud/dialogs'
+import { subscribe, unsubscribe } from '@nextcloud/event-bus'
 import { loadState } from '@nextcloud/initial-state'
 import { translate as t } from '@nextcloud/l10n'
 import { generateUrl } from '@nextcloud/router'
@@ -25,6 +26,7 @@ interface SettingsState {
 	errors: Record<string, string | null>
 	errorCodes: Record<string, number | null>
 	initialized: boolean
+	eventListenersRegistered: boolean
 }
 
 /**
@@ -112,6 +114,7 @@ export const useSettingsStore = defineStore('settings-spa', {
 			errors: {},
 			errorCodes: {},
 			initialized: !!initialContent,
+			eventListenersRegistered: false,
 		}
 	},
 
@@ -295,6 +298,55 @@ export const useSettingsStore = defineStore('settings-spa', {
 			} catch {
 				// Silently fail for prefetch
 			}
+		},
+
+		/**
+		 * Register event listeners for app state changes
+		 *
+		 * When apps are enabled/disabled/uninstalled, they may add/remove
+		 * settings sections. Listen for these events to refresh the cache.
+		 */
+		registerEventListeners(): void {
+			if (this.eventListenersRegistered) {
+				return
+			}
+
+			// Listen for app menu refresh - triggered after app enable/disable/uninstall
+			// See: apps/settings/src/service/rebuild-navigation.js
+			subscribe('nextcloud:app-menu.refresh', this.handleAppStateChange.bind(this))
+
+			this.eventListenersRegistered = true
+			logger.debug('Settings store: registered app event listeners')
+		},
+
+		/**
+		 * Unregister event listeners (for cleanup)
+		 */
+		unregisterEventListeners(): void {
+			if (!this.eventListenersRegistered) {
+				return
+			}
+
+			unsubscribe('nextcloud:app-menu.refresh', this.handleAppStateChange.bind(this))
+
+			this.eventListenersRegistered = false
+			logger.debug('Settings store: unregistered app event listeners')
+		},
+
+		/**
+		 * Handle app state changes (enable/disable/uninstall)
+		 *
+		 * When an app changes state, it may have added or removed settings.
+		 * Clear our cache and refresh sections to pick up the changes.
+		 */
+		handleAppStateChange(): void {
+			logger.debug('Settings store: app state changed, refreshing sections')
+
+			// Clear all cached content since apps may have added/removed settings
+			this.clearAllContent()
+
+			// Refresh sections from the server
+			this.loadSections(true)
 		},
 	},
 })

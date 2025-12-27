@@ -68,6 +68,10 @@ return [
 		['name' => 'WebAuthn#deleteRegistration', 'url' => '/settings/api/personal/webauthn/registration/{id}', 'verb' => 'DELETE' , 'root' => ''],
 
 		['name' => 'Reasons#getPdf', 'url' => '/settings/download/reasons', 'verb' => 'GET', 'root' => ''],
+
+		// Settings SPA API endpoints
+		['name' => 'SettingsApi#getSection', 'url' => '/settings/api/spa/section/{type}/{section}', 'verb' => 'GET', 'root' => ''],
+		['name' => 'SettingsApi#getSections', 'url' => '/settings/api/spa/sections', 'verb' => 'GET', 'root' => ''],
 	],
 	'ocs' => [
 		['name' => 'DeclarativeSettings#setValue', 'url' => '/settings/api/declarative/value', 'verb' => 'POST', 'root' => ''],

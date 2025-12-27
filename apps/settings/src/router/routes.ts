@@ -16,6 +16,11 @@ const AppStoreSidebar = () => import(/* webpackChunkName: 'settings-apps-view' *
 const UserManagement = () => import(/* webpackChunkName: 'settings-users' */'../views/UserManagement.vue')
 const UserManagementNavigation = () => import(/* webpackChunkName: 'settings-users' */'../views/UserManagementNavigation.vue')
 
+// Settings SPA views
+const PersonalSettings = () => import(/* webpackChunkName: 'settings-spa' */'../views/PersonalSettings.vue')
+const AdminSettings = () => import(/* webpackChunkName: 'settings-spa' */'../views/AdminSettings.vue')
+const SettingsNavigation = () => import(/* webpackChunkName: 'settings-spa' */'../views/SettingsNavigation.vue')
+
 const routes: RouteConfig[] = [
 	{
 		name: 'users',
@@ -58,6 +63,34 @@ const routes: RouteConfig[] = [
 				],
 			},
 		],
+	},
+	// Personal Settings SPA
+	{
+		path: '/:index(index.php/)?settings/user/:section?',
+		name: 'personal-settings',
+		components: {
+			default: PersonalSettings,
+			navigation: SettingsNavigation,
+		},
+		props: {
+			default: (route) => ({
+				section: route.params.section || 'personal-info',
+			}),
+		},
+	},
+	// Admin Settings SPA
+	{
+		path: '/:index(index.php/)?settings/admin/:section?',
+		name: 'admin-settings',
+		components: {
+			default: AdminSettings,
+			navigation: SettingsNavigation,
+		},
+		props: {
+			default: (route) => ({
+				section: route.params.section || 'server',
+			}),
+		},
 	},
 ]
 

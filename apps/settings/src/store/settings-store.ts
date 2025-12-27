@@ -4,8 +4,7 @@
  */
 
 import type { IDeclarativeForm, ISettingsSection, ISectionContent } from '../settings-types.ts'
-
-import axios from '@nextcloud/axios'
+import axios, { isAxiosError } from '@nextcloud/axios'
 import { showError } from '@nextcloud/dialogs'
 import { subscribe, unsubscribe } from '@nextcloud/event-bus'
 import { loadState } from '@nextcloud/initial-state'
@@ -88,11 +87,21 @@ function loadInitialSections(): { personal: ISettingsSection[], admin: ISettings
  */
 function loadInitialContent(): ISectionContent | null {
 	try {
-		return loadState<ISectionContent>('settings', 'sectionContent', null)
+		return loadState<ISectionContent>('settings', 'sectionContent', {
+			declarative: [],
+			legacyHtml: '',
+			scripts: [],
+		})
 	} catch {
 		return null
 	}
 }
+
+/**
+ * Store the bound event handler reference for proper cleanup
+ * This must be the same reference used for both subscribe and unsubscribe
+ */
+let boundHandler: (() => void) | null = null
 
 export const useSettingsStore = defineStore('settings-spa', {
 	state: (): SettingsState => {
@@ -229,7 +238,7 @@ export const useSettingsStore = defineStore('settings-spa', {
 			} catch (error) {
 				logger.error('Failed to load section content', { type, section, error })
 
-				if (axios.isAxiosError(error)) {
+				if (isAxiosError(error)) {
 					const status = error.response?.status
 					this.errorCodes[key] = status ?? null
 
@@ -311,9 +320,10 @@ export const useSettingsStore = defineStore('settings-spa', {
 				return
 			}
 
-			// Listen for app menu refresh - triggered after app enable/disable/uninstall
-			// See: apps/settings/src/service/rebuild-navigation.js
-			subscribe('nextcloud:app-menu.refresh', this.handleAppStateChange.bind(this))
+			// Store the bound function reference for proper cleanup
+			// Must use the same reference for both subscribe and unsubscribe
+			boundHandler = this.handleAppStateChange.bind(this)
+			subscribe('nextcloud:app-menu.refresh', boundHandler)
 
 			this.eventListenersRegistered = true
 			logger.debug('Settings store: registered app event listeners')
@@ -323,11 +333,13 @@ export const useSettingsStore = defineStore('settings-spa', {
 		 * Unregister event listeners (for cleanup)
 		 */
 		unregisterEventListeners(): void {
-			if (!this.eventListenersRegistered) {
+			if (!this.eventListenersRegistered || !boundHandler) {
 				return
 			}
 
-			unsubscribe('nextcloud:app-menu.refresh', this.handleAppStateChange.bind(this))
+			// Use the same bound function reference that was used for subscribe
+			unsubscribe('nextcloud:app-menu.refresh', boundHandler)
+			boundHandler = null
 
 			this.eventListenersRegistered = false
 			logger.debug('Settings store: unregistered app event listeners')

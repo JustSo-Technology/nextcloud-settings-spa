@@ -7,6 +7,12 @@
 	<NcAppContent>
 		<div class="admin-settings">
 			<NcLoadingIcon v-if="loading" :size="64" class="loading-icon" />
+			<NcEmptyContent v-else-if="accessDenied"
+				:name="t('settings', 'Access denied')"
+				:description="t('settings', 'You do not have permission to access this section.')">
+				<template #icon>
+					<NcIconSvgWrapper :path="mdiLock" />
+				</template>
 			<NcEmptyContent v-else-if="error"
 				:name="t('settings', 'Failed to load settings')"
 				:description="error">
@@ -17,13 +23,6 @@
 					<NcButton type="primary" @click="loadSection">
 						{{ t('settings', 'Retry') }}
 					</NcButton>
-				</template>
-			</NcEmptyContent>
-			<NcEmptyContent v-else-if="accessDenied"
-				:name="t('settings', 'Access denied')"
-				:description="t('settings', 'You do not have permission to access this section.')">
-				<template #icon>
-					<NcIconSvgWrapper :path="mdiLock" />
 				</template>
 			</NcEmptyContent>
 			<template v-else>
